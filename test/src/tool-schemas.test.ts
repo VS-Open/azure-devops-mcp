@@ -14,7 +14,7 @@ import { TOOL_ANNOTATIONS } from "../../src/shared/tool-annotations";
 import { dateInputSchema } from "../../src/shared/tool-schemas";
 import { configureAllTools } from "../../src/tools";
 
-jest.mock("../../src/index", () => ({ orgName: "test-org" }));
+jest.mock("../../src/config", () => ({ orgName: "test-org", orgUrl: "https://dev.azure.com/test-org", isCustomUrl: false }));
 
 describe("date input schema", () => {
   it.each([

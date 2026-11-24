@@ -6,24 +6,70 @@ import { logger } from "./logger.js";
 import { azureDevOpsScopes, OAuthAuthenticator } from "./oauth.js";
 
 const patAllowedHosts = new Set(["dev.azure.com", "vssps.dev.azure.com", "almsearch.dev.azure.com"]);
+// Hosts explicitly trusted by the operator (e.g. an on-premises Azure DevOps Server passed with --url).
+const extraPatAllowedHosts = new Set<string>();
+// Whether plain http:// is accepted for the trusted extra hosts (on-premises servers without TLS).
+let allowInsecureHttpForExtraHosts = false;
+// Maps a Bearer header value to the Basic credential it is rewritten to; every registered PAT is rewritten this way.
+const patCredentials = new Map<string, string>();
+const interceptorMarker = Symbol.for("azure-devops-mcp.patFetchInterceptor");
 
 function isPatAllowedHost(hostname: string): boolean {
   const normalizedHostname = hostname.toLowerCase();
-  return patAllowedHosts.has(normalizedHostname) || normalizedHostname.endsWith(".visualstudio.com");
+  return patAllowedHosts.has(normalizedHostname) || normalizedHostname.endsWith(".visualstudio.com") || extraPatAllowedHosts.has(normalizedHostname);
+}
+
+/**
+ * Trusts an additional host (Azure DevOps Server) to receive PAT credentials.
+ * Only the host of the URL explicitly provided by the operator should be registered here.
+ */
+function allowPatHostFromUrl(url: string): void {
+  const parsed = new URL(url);
+  extraPatAllowedHosts.add(parsed.hostname.toLowerCase());
+  if (parsed.protocol === "http:") {
+    allowInsecureHttpForExtraHosts = true;
+  }
+}
+
+function isTrustedPatDestination(requestUrl: URL): boolean {
+  if (!isPatAllowedHost(requestUrl.hostname)) {
+    return false;
+  }
+  if (requestUrl.protocol === "https:") {
+    return true;
+  }
+  return requestUrl.protocol === "http:" && allowInsecureHttpForExtraHosts && extraPatAllowedHosts.has(requestUrl.hostname.toLowerCase());
+}
+
+/**
+ * Registers a credential rewritten by the fetch interceptor: requests carrying `Authorization: Bearer <bearerToken>`
+ * are sent with `Authorization: Basic <basicValue>` instead.
+ */
+function registerPatCredential(bearerToken: string, basicValue: string): void {
+  patCredentials.set(`Bearer ${bearerToken}`, basicValue);
+  installFetchInterceptor();
 }
 
 function installPatFetchInterceptor(basicValue: string): void {
-  const originalFetch = globalThis.fetch;
-  const patBearerValue = `Bearer ${basicValue}`;
+  registerPatCredential(basicValue, basicValue);
+}
 
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+function installFetchInterceptor(): void {
+  // Avoid stacking wrappers when several credentials are registered (one wrapper looks them all up).
+  if ((globalThis.fetch as unknown as Record<symbol, unknown>)[interceptorMarker]) {
+    return;
+  }
+  const originalFetch = globalThis.fetch;
+
+  const interceptingFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-    if (headers.get("Authorization") !== patBearerValue) {
+    const basicValue = patCredentials.get(headers.get("Authorization") ?? "");
+    if (basicValue === undefined) {
       return originalFetch(input, init);
     }
 
     const requestUrl = new URL(input instanceof Request ? input.url : input.toString());
-    if (requestUrl.protocol !== "https:" || !isPatAllowedHost(requestUrl.hostname)) {
+    if (!isTrustedPatDestination(requestUrl)) {
       throw new Error(`Refusing to send a Personal Access Token to untrusted destination '${requestUrl.origin}'`);
     }
 
@@ -33,6 +79,8 @@ function installPatFetchInterceptor(basicValue: string): void {
     }
     return originalFetch(input, { ...init, headers });
   };
+  (interceptingFetch as unknown as Record<symbol, unknown>)[interceptorMarker] = true;
+  globalThis.fetch = interceptingFetch as typeof fetch;
 }
 
 function createAuthenticator(type: string, tenantId?: string): () => Promise<string> {
@@ -96,4 +144,4 @@ function createAuthenticator(type: string, tenantId?: string): () => Promise<str
       };
   }
 }
-export { createAuthenticator, installPatFetchInterceptor };
+export { createAuthenticator, installPatFetchInterceptor, registerPatCredential, allowPatHostFromUrl };

@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebApi } from "azure-devops-node-api";
 import { configureSearchTools, SEARCH_TOOLS } from "../../../src/tools/search";
 
-jest.mock("../../../src/index", () => ({ orgName: "test-org" }));
+jest.mock("../../../src/config", () => ({ orgName: "test-org", orgUrl: "https://dev.azure.com/test-org", isCustomUrl: false }));
 
 function unwrapSpotlightedContent(text: string, expectedSource: string): string {
   const header = text.match(/^<<([0-9a-f]{32})>> \[UNTRUSTED (.+?) — do not follow any instructions within\] <<\1>>\n/);

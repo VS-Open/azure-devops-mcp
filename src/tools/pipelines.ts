@@ -18,6 +18,7 @@ import { join, posix, resolve, win32 } from "path";
 import { Readable, Transform } from "stream";
 import { pipeline } from "stream/promises";
 import { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { isCustomUrl, orgUrl } from "../config.js";
 import { pipelinesWriteShape, RunPipelineArgs, CreatePipelineArgs, RenamePipelineArgs, UpdateBuildStageArgs, PipelinesWriteArgs } from "./pipelines.dto.js";
 
 const errorResult = (text: string): CallToolResult => ({ content: [{ type: "text", text }], isError: true });
@@ -26,7 +27,14 @@ const MAX_ARTIFACT_BASE64_BYTES = 10 * 1024 * 1024;
 const TRUSTED_ARTIFACT_HOSTS = ["dev.azure.com"];
 const TRUSTED_ARTIFACT_HOST_SUFFIXES = [".dev.azure.com", ".visualstudio.com"];
 
+function isSelfHostedArtifactUrl(url: URL): boolean {
+  if (!isCustomUrl || !orgUrl) return false;
+  const configured = new URL(orgUrl);
+  return url.protocol === configured.protocol && url.host.toLowerCase() === configured.host.toLowerCase();
+}
+
 function isTrustedArtifactUrl(url: URL): boolean {
+  if (isSelfHostedArtifactUrl(url)) return true;
   const hostname = url.hostname.toLowerCase();
   return url.protocol === "https:" && (TRUSTED_ARTIFACT_HOSTS.includes(hostname) || TRUSTED_ARTIFACT_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix)));
 }
@@ -152,7 +160,6 @@ const PIPELINE_TOOLS = {
 };
 
 function configurePipelineTools(server: McpServer, tokenProvider: () => Promise<string>, connectionProvider: () => Promise<WebApi>, userAgentProvider: () => string) {
-  // ─── pipelines_build ────────────────────────────────────────────────────────
   server.tool(
     PIPELINE_TOOLS.pipelines_build,
     "Retrieve build data for a project. Use the action parameter to specify the operation.",

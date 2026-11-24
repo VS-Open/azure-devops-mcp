@@ -1,9 +1,23 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-export const apiVersion = "7.2-preview.1";
+export let apiVersion = "7.2-preview.1";
 export const batchApiVersion = "5.0";
-export const markdownCommentsApiVersion = "7.2-preview.4";
+export let markdownCommentsApiVersion = "7.2-preview.4";
+
+/**
+ * Updates the global API versions.
+ * @param version The new API version to use for the main API
+ */
+export function setApiVersions(version: string): void {
+  apiVersion = version;
+  // The work item comments resource area is preview-only: Azure DevOps (Server and Services)
+  // rejects a plain "X.Y" version for this endpoint with VssInvalidPreviewVersionException and
+  // requires the "-preview" suffix, even when the rest of the API is requested at a stable version.
+  markdownCommentsApiVersion = version.includes("preview") ? version : `${version}-preview`;
+  // batchApiVersion is left at 5.0 — the $batch endpoint has been stable at that
+  // version across both Azure DevOps Services and on-prem Server releases.
+}
 
 /**
  * Returns the user-supplied CLI arguments.

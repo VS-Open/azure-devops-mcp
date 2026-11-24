@@ -9,7 +9,7 @@ import { Domain } from "../../src/shared/domains";
 import { configureAllTools } from "../../src/tools";
 import * as coreTools from "../../src/tools/core";
 
-jest.mock("../../src/index", () => ({ orgName: "test-org" }));
+jest.mock("../../src/config", () => ({ orgName: "test-org", orgUrl: "https://dev.azure.com/test-org", isCustomUrl: false }));
 jest.mock("../../src/logger", () => ({ logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() } }));
 
 describe("tool registration", () => {

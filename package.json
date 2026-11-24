@@ -29,12 +29,15 @@
     "watch": "tsc --watch",
     "inspect": "ALLOWED_ORIGINS=http://127.0.0.1:6274 npx @modelcontextprotocol/inspector@0.21.0 node dist/index.js",
     "start": "node -r tsconfig-paths/register dist/index.js",
+    "start:http": "node -r tsconfig-paths/register dist/index.js --transport http --authentication request",
     "eslint": "eslint",
     "eslint-fix": "eslint --fix",
     "format": "prettier --write .",
     "format-check": "prettier --check .",
     "clean": "shx rm -rf dist",
-    "test": "jest"
+    "test": "jest",
+    "test:selfhosted": "npm run build && jest -c jest.integration.config.cjs",
+    "build-image": "docker build -t $npm_config_tag ."
   },
   "dependencies": {
     "@azure/identity": "^4.13.0",
@@ -44,6 +47,7 @@
     "azure-devops-extension-api": "^5.272.3",
     "azure-devops-extension-sdk": "^4.0.2",
     "azure-devops-node-api": "^15.1.2",
+    "express": "^5.2.1",
     "open": "^10.2.0",
     "winston": "^3.18.3",
     "yargs": "^18.0.0",
@@ -53,6 +57,7 @@
     "@azure/msal-node-extensions": "^5.3.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^22.19.1",
     "eslint-config-prettier": "10.1.8",
