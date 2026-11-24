@@ -1,0 +1,158 @@
+# CI/CD for the VAL fork: test on dev, publish the Docker image to the registry from a version tag only.
+#
+# Nothing environment specific is hard-coded: registry, project, image name and credentials all come from
+# repository secrets / variables (see docs/CI-REGISTRY.md). Registry host and credentials are SECRETS (not variables)
+# so that GitHub masks them in logs even if the repository is public.
+name: VAL CI - Test, Build & Publish to registry
+
+on:
+  push:
+    branches: [dev]
+    tags: ["v*"]
+  pull_request:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: val-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+permissions:
+  contents: read
+
+# Optional: set the repository variable RUNS_ON to a JSON array to use self-hosted runners,
+# e.g. ["self-hosted","linux"]. Not needed with a cloud registry: GitHub-hosted runners are the default.
+
+jobs:
+  test:
+    name: Lint, build & unit tests
+    # Never run PRs coming from forks on our runners / with our config.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Use internal npm registry (optional)
+        if: ${{ vars.NPM_REGISTRY != '' }}
+        run: npm config set registry "$NPM_REGISTRY"
+        env:
+          NPM_REGISTRY: ${{ vars.NPM_REGISTRY }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run eslint -- .
+
+      - name: Format check
+        run: npm run format-check
+
+      - name: Build
+        run: npm run build
+
+      # `npm test` runs test/src only: the self-hosted integration tests (npm run test:selfhosted) are NOT run here.
+      - name: Unit tests
+        run: npm test
+
+  docker-build:
+    name: Docker image build (no push)
+    needs: test
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Verifies the Dockerfile still builds on every dev push / PR, without publishing anything.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: azure-devops-mcp:ci
+
+  publish:
+    name: Publish image to the registry (tags only)
+    needs: [test, docker-build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 30
+    # Create an Environment named "registry" in the repo settings to add required reviewers if you want a manual approval.
+    environment: registry
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # A tag can only be published if its commit belongs to the dev branch.
+      - name: Ensure the tag points to a commit of dev
+        run: |
+          git fetch origin dev
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/dev; then
+            echo "::error::Tag ${GITHUB_REF_NAME} is not on the dev branch: refusing to publish."
+            exit 1
+          fi
+
+      - name: Validate required secrets
+        env:
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL || secrets.REGISTRY_HOST }}
+          REGISTRY_PROJECT: ${{ secrets.REGISTRY_PROJECT }}
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          for name in REGISTRY_URL REGISTRY_PROJECT REGISTRY_USERNAME REGISTRY_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Missing secret ${name} (REGISTRY_URL may also be named REGISTRY_HOST)"; exit 1; fi
+          done
+
+      - name: Compute image name
+        id: image
+        env:
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL || secrets.REGISTRY_HOST }}
+          REGISTRY_PROJECT: ${{ secrets.REGISTRY_PROJECT }}
+          REGISTRY_IMAGE: ${{ secrets.REGISTRY_IMAGE }}
+        run: |
+          registry="${REGISTRY_URL#*://}"
+          registry="${registry%/}"
+          echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+          echo "name=${registry}/${REGISTRY_PROJECT}/${REGISTRY_IMAGE:-azure-devops-mcp}" >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata (tags & labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ steps.image.outputs.registry }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
