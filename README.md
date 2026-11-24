@@ -147,8 +147,6 @@ Always include `core` so the agent can retrieve project information.
 
 Set default Azure DevOps project and team values in `.vscode/mcp.json` so tools can skip selection prompts.
 
-### Example `.vscode/mcp.json`
-
 ```json
 {
   "servers": {
@@ -164,6 +162,118 @@ Set default Azure DevOps project and team values in `.vscode/mcp.json` so tools 
   }
 }
 ```
+
+## 🐳 Install with Docker
+
+You can also run the Azure DevOps MCP Server using Docker. This is a great option if you want to avoid installing Node.js locally or need a consistent environment.
+
+### Steps
+
+1. **Build the image**:
+
+   ```bash
+   docker build -t azure-devops-mcp .
+   ```
+
+2. **Run the container**:
+   Pass your Azure DevOps organization and any required arguments. For example:
+
+   ```bash
+   docker run -i --rm azure-devops-mcp <your-org-name>
+   ```
+
+   To use a Personal Access Token (PAT) with Azure DevOps Server:
+
+   ```bash
+   docker run -i --rm -e ADO_MCP_AUTH_TOKEN=<your-pat> azure-devops-mcp DefaultCollection --url <your-collection-url> --authentication pat
+   ```
+
+> [!NOTE]
+> The `-i` flag is required for `stdio` communication with the MCP host.
+
+## 🌐 HTTP Transport (Streamable HTTP)
+
+By default the server uses `stdio` transport (subprocess mode). You can also run it as a standalone HTTP server using the [MCP 2025-11-25 Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http), which allows multiple clients to connect without spawning a new process each time.
+
+### Starting the HTTP server
+
+```bash
+npx -y @azure-devops/mcp@latest <organization> --transport http --authentication envvar
+```
+
+Or if installed locally:
+
+```bash
+mcp-server-azuredevops <organization> --transport http --port 3000 --host 127.0.0.1
+```
+
+| Flag          | Default     | Description                        |
+| ------------- | ----------- | ---------------------------------- |
+| `--transport` | `stdio`     | `stdio` or `http`                  |
+| `--port`      | `3000`      | Port to listen on (HTTP mode only) |
+| `--host`      | `127.0.0.1` | Bind address (HTTP mode only)      |
+
+The MCP endpoint is available at `http://<host>:<port>/mcp`.
+
+### Authentication recommendations
+
+> [!IMPORTANT]
+> For HTTP deployments, use `--authentication envvar` (set `AZURE_DEVOPS_TOKEN` to a Personal Access Token) or `--authentication pat`. The `interactive` and `azcli` authentication modes open a browser popup on the first tool call, which may be unexpected in server deployments.
+
+### Client-provided PAT (`--authentication request`)
+
+Use `--authentication request` when you want each connecting client to supply its own Personal Access Token rather than sharing a single server-level credential. In this mode **no PAT environment variable is needed at startup** — the server reads the token from the `X-Azure-DevOps-PAT` HTTP header sent with each `InitializeRequest`.
+
+```bash
+mcp-server-azuredevops <organization> --transport http --authentication request
+```
+
+Each MCP client must include the header on every session initialisation:
+
+```
+X-Azure-DevOps-PAT: <your-personal-access-token>
+```
+
+> [!WARNING]
+> PATs travel in plain HTTP headers. **Always run behind TLS** (HTTPS) when using `--authentication request` in production, especially when binding to a non-localhost address.
+
+### Security notes
+
+- When binding to `127.0.0.1` (the default), DNS rebinding protection is automatically enabled.
+- Binding to `0.0.0.0` disables DNS rebinding protection — add a reverse proxy with authentication for public-facing deployments.
+
+## 🏢 Azure DevOps Server (On-Premise) Support
+
+The server can talk to a self-hosted **Azure DevOps Server / TFS** instance, over stdio or Streamable HTTP.
+
+| Flag                  | Description                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `--url`, `-u`         | Full collection URL, e.g. `https://tfs.contoso.com/tfs/DefaultCollection`. Without it the server targets `dev.azure.com`.       |
+| `--authentication`    | Use `pat` (base64 `email:pat` in `PERSONAL_ACCESS_TOKEN`), `envvar` (raw PAT in `ADO_MCP_AUTH_TOKEN`) or `request` (HTTP only). |
+| `--api-version`, `-v` | REST API version to request (default `7.2-preview.1`; use e.g. `7.0` / `6.0` for older Server releases).                        |
+| `--insecure`          | Accept self-signed TLS certificates.                                                                                            |
+
+The PAT is only ever sent to the host of `--url` (and to Azure DevOps Services hosts); plain `http://` is accepted only if `--url` itself is `http://`.
+
+```bash
+ADO_MCP_AUTH_TOKEN=<raw-pat> mcp-server-azuredevops DefaultCollection \
+  --url https://tfs.contoso.com/tfs/DefaultCollection --authentication envvar \
+  --transport http --host 127.0.0.1 --port 3000
+```
+
+### Testing against a self-hosted instance
+
+Unit tests (`npm test`) never reach the network. Integration tests that call a real Azure DevOps Server (stdio and HTTP streamable) are opt-in, **read-only and confined to one project** because they are meant to run against production:
+
+```bash
+export ADO_SELFHOSTED_URL=https://tfs.contoso.com/tfs/DefaultCollection
+export ADO_SELFHOSTED_PAT=<raw-pat>          # use a read-only PAT scoped to the test project
+export ADO_SELFHOSTED_PROJECT=<test-project> # REQUIRED: the only project the tests may touch
+# optional: ADO_SELFHOSTED_ORG, ADO_SELFHOSTED_INSECURE=true, ADO_SELFHOSTED_API_VERSION
+npm run test:selfhosted
+```
+
+Safeguards (`test/integration/helpers.ts`): only an allowlist of read-only tools/actions can be called, every call must target `ADO_SELFHOSTED_PROJECT` (project listing and searches are filtered on it), and the suite fails if the project variable is missing. Without `ADO_SELFHOSTED_URL` / `ADO_SELFHOSTED_PAT` the suite is skipped.
 
 ## Troubleshooting
 
